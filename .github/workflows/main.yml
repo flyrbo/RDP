@@ -126,7 +126,7 @@ jobs:
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
 
-          $endTime = (Get-Date).AddMinutes(350)   # ~5h50m runtime
+          $endTime = (Get-Date).AddMinutes(350)
           while ((Get-Date) -lt $endTime) {
               Write-Host "[$(Get-Date)] RDP Active - ending gracefully soon..."
               Start-Sleep -Seconds 300
@@ -142,30 +142,30 @@ jobs:
         if: always()
         run: |
           $backupPath = "C:\Users\runneradmin\Downloads\backup"
+          $zipPath = "$env:GITHUB_WORKSPACE\backup.zip"
           if (Test-Path $backupPath) {
-              $zipPath = "C:\Users\runneradmin\Downloads\backup.zip"
               Compress-Archive -Path $backupPath -DestinationPath $zipPath -Force
               Write-Host "✅ Backup archived to $zipPath"
-
           } else {
               Write-Host "⚠️ No backup folder found, skipping archive."
           }
-        continue-on-error: true
 
       - name: Upload Backup Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rdp-backup
-          path: C:\Users\runneradmin\Downloads\backup.zip
+          path: ${{ github.workspace }}/backup.zip
 
       - name: Relaunch Workflow
         if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $headers = @{
             Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept = "application/vnd.github+json"
           }
           $body = '{"ref": "main"}'
-          Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/RDP.yml/dispatches" -Headers $headers -Body $body -Method Post
+          Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/main.yml/dispatches" -Headers $headers -Body $body -Method Post
           Write-Host "🔁 Relaunch triggered successfully."
