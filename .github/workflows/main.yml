@@ -11,6 +11,7 @@ jobs:
     timeout-minutes: 360
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     steps:
       # ===========================================
       # RESTORE BACKUP FILES FROM PREVIOUS SESSION
@@ -126,7 +127,7 @@ jobs:
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
 
-          $endTime = (Get-Date).AddMinutes(350)
+          $endTime = (Get-Date).AddMinutes(350)   # ~5h50m runtime
           while ((Get-Date) -lt $endTime) {
               Write-Host "[$(Get-Date)] RDP Active - ending gracefully soon..."
               Start-Sleep -Seconds 300
@@ -136,16 +137,20 @@ jobs:
           exit 0
 
       # ===========================================
-      # BACKUP AND RELAUNCH
+      # BACKUP AND RELAUNCH (fixed upload path)
       # ===========================================
       - name: Backup Files to Artifact
         if: always()
         run: |
           $backupPath = "C:\Users\runneradmin\Downloads\backup"
-          $zipPath = "$env:GITHUB_WORKSPACE\backup.zip"
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "backup.zip"
           if (Test-Path $backupPath) {
               Compress-Archive -Path $backupPath -DestinationPath $zipPath -Force
-              Write-Host "✅ Backup archived to $zipPath"
+              if (Test-Path $zipPath) {
+                  Write-Host "✅ Backup archived to $zipPath"
+              } else {
+                  Write-Error "❌ Backup zip file was not created!"
+              }
           } else {
               Write-Host "⚠️ No backup folder found, skipping archive."
           }
@@ -155,17 +160,24 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rdp-backup
-          path: ${{ github.workspace }}/backup.zip
+          path: backup.zip
+          if-no-files-found: error
 
-      - name: Relaunch Workflow
+      - name: Relaunch Workflow (unless manually cancelled)
         if: always()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          Write-Host "🔁 Job ended with status: ${{ job.status }}"
+          if ("${{ job.status }}" -eq "cancelled") {
+              Write-Host "🛑 Workflow manually cancelled — skipping relaunch."
+              exit 0
+          }
+
           $headers = @{
             Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept = "application/vnd.github+json"
           }
           $body = '{"ref": "main"}'
-          Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/main.yml/dispatches" -Headers $headers -Body $body -Method Post
+          Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/RDP.yml/dispatches" -Headers $headers -Body $body -Method Post
           Write-Host "🔁 Relaunch triggered successfully."
