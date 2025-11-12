@@ -9,6 +9,8 @@ jobs:
   secure-rdp:
     runs-on: windows-latest
     timeout-minutes: 360
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       # ===========================================
       # RESTORE BACKUP FILES FROM PREVIOUS SESSION
@@ -141,8 +143,10 @@ jobs:
         run: |
           $backupPath = "C:\Users\runneradmin\Downloads\backup"
           if (Test-Path $backupPath) {
-              Compress-Archive -Path $backupPath -DestinationPath "C:\backup.zip" -Force
-              Write-Host "✅ Backup archived from $backupPath"
+              $zipPath = "C:\Users\runneradmin\Downloads\backup.zip"
+              Compress-Archive -Path $backupPath -DestinationPath $zipPath -Force
+              Write-Host "✅ Backup archived to $zipPath"
+
           } else {
               Write-Host "⚠️ No backup folder found, skipping archive."
           }
@@ -153,7 +157,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rdp-backup
-          path: C:\backup.zip
+          path: C:\Users\runneradmin\Downloads\backup.zip
 
       - name: Relaunch Workflow
         if: always()
