@@ -108,7 +108,7 @@ jobs:
           Write-Host "✅ TCP connectivity successful!"
 
       # ===========================================
-      # KEEP SESSION ACTIVE
+      # KEEP SESSION ACTIVE (graceful 5h50m timeout)
       # ===========================================
       - name: Maintain Connection
         run: |
@@ -117,15 +117,21 @@ jobs:
               New-Item -ItemType Directory -Force -Path $backupFolder | Out-Null
               Write-Host "📁 Created backup folder at $backupFolder"
           }
+
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: RDP"
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C to stop."
+
+          $endTime = (Get-Date).AddMinutes(350)   # ~5h50m runtime
+          while ((Get-Date) -lt $endTime) {
+              Write-Host "[$(Get-Date)] RDP Active - ending gracefully soon..."
               Start-Sleep -Seconds 300
           }
+
+          Write-Host "⏰ Session reached 5h50m, shutting down for backup..."
+          exit 0
 
       # ===========================================
       # BACKUP AND RELAUNCH
