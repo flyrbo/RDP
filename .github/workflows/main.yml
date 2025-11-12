@@ -1,8 +1,8 @@
 name: RDP
+permissions:
+  contents: write
+  actions: write
 on:
-  permissions:
-    contents: write
-    actions: write
   workflow_dispatch:
 
 jobs:
