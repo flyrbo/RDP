@@ -2,6 +2,7 @@ name: RDP
 permissions:
   contents: write
   actions: write
+
 on:
   workflow_dispatch:
 
@@ -11,6 +12,7 @@ jobs:
     timeout-minutes: 360
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RDP_ENABLE_RELAUNCH: "true"   # <-- change to false to stop auto-relaunch forever
 
     steps:
       # ===========================================
@@ -33,7 +35,7 @@ jobs:
               Expand-Archive -Path "C:\restore\backup.zip" -DestinationPath $restorePath -Force
               Write-Host "✅ Backup restored to $restorePath"
           } else {
-              Write-Host "ℹ️ No previous backup found, starting fresh."
+              Write-Host "ℹ️ No previous backup found."
           }
 
       # ===========================================
@@ -88,11 +90,10 @@ jobs:
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
+          for ($i=0; $i -lt 10; $i++) {
               $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              if ($tsIP) { break }
               Start-Sleep -Seconds 5
-              $retries++
           }
           if (-not $tsIP) {
               Write-Error "Tailscale IP not assigned. Exiting."
@@ -103,37 +104,31 @@ jobs:
       - name: Verify RDP Accessibility
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
+          $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $test.TcpTestSucceeded) {
+              Write-Error "TCP connection failed on port 3389"
               exit 1
           }
           Write-Host "✅ TCP connectivity successful!"
 
       # ===========================================
-      # KEEP SESSION ACTIVE (graceful 5h50m timeout)
+      # KEEP SESSION ACTIVE (graceful 5h50m)
       # ===========================================
-      - name: Maintain Connection
+      - name: Maintain Session
         run: |
-          $backupFolder = "C:\Users\runneradmin\Downloads\backup"
-          if (-not (Test-Path $backupFolder)) {
-              New-Item -ItemType Directory -Force -Path $backupFolder | Out-Null
-              Write-Host "📁 Created backup folder at $backupFolder"
-          }
+          $folder = "C:\Users\runneradmin\Downloads\backup"
+          if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force }
+          
+          # Always generate at least one file (prevents backup error)
+          $testFile = Join-Path $folder "testfile.txt"
+          Set-Content -Path $testFile -Value "Backup system is working."
 
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
-          Write-Host "==================`n"
-
-          $endTime = (Get-Date).AddMinutes(350)   # ~5h50m runtime
+          $endTime = (Get-Date).AddMinutes(350)
           while ((Get-Date) -lt $endTime) {
-              Write-Host "[$(Get-Date)] RDP Active - ending gracefully soon..."
+              Write-Host "[$(Get-Date)] RDP Active..."
               Start-Sleep -Seconds 300
           }
-
-          Write-Host "⏰ Session reached 5h50m, shutting down for backup..."
+          Write-Host "⏰ Graceful shutdown triggered."
           exit 0
 
       # ===========================================
@@ -149,10 +144,10 @@ jobs:
               if (Test-Path $zipPath) {
                   Write-Host "✅ Backup archived to $zipPath"
               } else {
-                  Write-Error "❌ Backup zip file was not created!"
+                  Write-Error "❌ Backup zip file was NOT created!"
               }
           } else {
-              Write-Host "⚠️ No backup folder found, skipping archive."
+              Write-Host "⚠️ No backup folder found."
           }
 
       - name: Upload Backup Artifact
@@ -163,21 +158,15 @@ jobs:
           path: backup.zip
           if-no-files-found: error
 
-      - name: Relaunch Workflow (unless manually cancelled)
-        if: always()
+      - name: Relaunch Workflow
+        if: always() && env.RDP_ENABLE_RELAUNCH == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Write-Host "🔁 Job ended with status: ${{ job.status }}"
-          if ("${{ job.status }}" -eq "cancelled") {
-              Write-Host "🛑 Workflow manually cancelled — skipping relaunch."
-              exit 0
-          }
-
           $headers = @{
             Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept = "application/vnd.github+json"
           }
           $body = '{"ref": "main"}'
           Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/RDP.yml/dispatches" -Headers $headers -Body $body -Method Post
-          Write-Host "🔁 Relaunch triggered successfully."
+          Write-Host "🔁 Relaunch triggered."
