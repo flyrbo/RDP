@@ -12,6 +12,7 @@ jobs:
     timeout-minutes: 360
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RDP_ENABLE_RELAUNCH: "true"   # set to "false" to permanently stop auto-relaunch
 
     steps:
       # ===========================================
@@ -89,11 +90,10 @@ jobs:
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
+          for ($i = 0; $i -lt 10; $i++) {
               $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              if ($tsIP) { break }
               Start-Sleep -Seconds 5
-              $retries++
           }
           if (-not $tsIP) {
               Write-Error "Tailscale IP not assigned. Exiting."
@@ -112,48 +112,72 @@ jobs:
           Write-Host "✅ TCP connectivity successful!"
 
       # ===========================================
-      # KEEP SESSION ACTIVE (~5h50m)
+      # KEEP SESSION ACTIVE (graceful 5h50m)
       # ===========================================
       - name: Maintain Connection
         run: |
           $backupFolder = "C:\Users\runneradmin\Downloads\backup"
+
+          # ensure Downloads/backup exists (auto-create so you don't need to)
           if (-not (Test-Path $backupFolder)) {
               New-Item -ItemType Directory -Force -Path $backupFolder | Out-Null
               Write-Host "📁 Created backup folder at $backupFolder"
           }
 
+          # ensure a test file exists so compression will always create a zip
+          $testFile = Join-Path $backupFolder "testfile.txt"
+          Set-Content -Path $testFile -Value "Backup test file - $(Get-Date)"
+
+          # Print login info for you to connect
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: RDP"
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
 
-          $endTime = (Get-Date).AddMinutes(350)
+          $endTime = (Get-Date).AddMinutes(350)   # ~5h50m runtime
           while ((Get-Date) -lt $endTime) {
-              Write-Host "[$(Get-Date)] RDP Active..."
+              Write-Host "[$(Get-Date)] RDP Active - ending gracefully soon..."
               Start-Sleep -Seconds 300
           }
 
-          Write-Host "⏰ Session ending, preparing backup..."
+          Write-Host "⏰ Session reached 5h50m, shutting down gracefully..."
           exit 0
 
       # ===========================================
-      # BACKUP & RELAUNCH
+      # BACKUP AND RELAUNCH (robust)
       # ===========================================
+      - name: Ensure backup folder exists (pre-backup)
+        if: always()
+        run: |
+          $backupFolder = "C:\Users\runneradmin\Downloads\backup"
+          if (-not (Test-Path $backupFolder)) {
+              New-Item -ItemType Directory -Force -Path $backupFolder | Out-Null
+              Write-Host "📁 Created backup folder at $backupFolder (pre-backup)"
+          } else {
+              Write-Host "📁 Backup folder exists: $backupFolder"
+          }
+
       - name: Backup Files to Artifact
         if: always()
         run: |
           $backupPath = "C:\Users\runneradmin\Downloads\backup"
           $zipPath = "C:\Users\runneradmin\backup.zip"
 
+          # remove existing zip if present
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+
           if (Test-Path $backupPath) {
-              if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-              Compress-Archive -Path $backupPath -DestinationPath $zipPath -Force
+              try {
+                  Compress-Archive -Path $backupPath -DestinationPath $zipPath -Force
+              } catch {
+                  Write-Host "⚠️ Compress-Archive threw an error but will continue: $_"
+              }
 
               if (Test-Path $zipPath) {
                   Write-Host "✅ Backup archived to $zipPath"
               } else {
-                  Write-Error "❌ Backup zip file was NOT created!"
+                  Write-Host "⚠️ Backup zip was not created (folder may be empty or compression failed). Continuing anyway."
               }
           } else {
               Write-Host "⚠️ No backup folder found, skipping archive."
@@ -165,27 +189,18 @@ jobs:
         with:
           name: rdp-backup
           path: C:\Users\runneradmin\backup.zip
-          if-no-files-found: error
+          if-no-files-found: warn
 
-
-      - name: Relaunch Workflow (unless manually cancelled)
-        if: always()
+      - name: Relaunch Workflow (only on success and enabled)
+        if: ${{ success() && env.RDP_ENABLE_RELAUNCH == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Write-Host "Job ended with status: ${{ job.status }}"
-
-          if ("${{ job.status }}" -eq "cancelled") {
-              Write-Host "🛑 Manual cancel detected — no relaunch."
-              exit 0
-          }
-
+          Write-Host "🔁 Triggering relaunch..."
           $headers = @{
             Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept = "application/vnd.github+json"
           }
           $body = '{"ref": "main"}'
-
           Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/RDP.yml/dispatches" -Headers $headers -Body $body -Method Post
-
           Write-Host "🔁 Relaunch triggered successfully."
