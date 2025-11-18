@@ -144,9 +144,10 @@ jobs:
         if: always()
         run: |
           $backupPath = "C:\Users\runneradmin\Downloads\backup"
-          $zipPath = Join-Path $env:GITHUB_WORKSPACE "backup.zip"
+          $zipPath = "C:\Users\runneradmin\backup.zip"
 
           if (Test-Path $backupPath) {
+              if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
               Compress-Archive -Path $backupPath -DestinationPath $zipPath -Force
 
               if (Test-Path $zipPath) {
@@ -154,7 +155,6 @@ jobs:
               } else {
                   Write-Error "❌ Backup zip file was NOT created!"
               }
-
           } else {
               Write-Host "⚠️ No backup folder found, skipping archive."
           }
@@ -164,8 +164,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rdp-backup
-          path: backup.zip
+          path: C:\Users\runneradmin\backup.zip
           if-no-files-found: error
+
 
       - name: Relaunch Workflow (unless manually cancelled)
         if: always()
